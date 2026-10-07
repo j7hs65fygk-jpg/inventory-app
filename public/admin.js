@@ -1,262 +1,163 @@
-const LOW_STOCK_THRESHOLD = 5;
-const inventoryForm = document.getElementById('inventoryForm');
-const formTitle = document.getElementById('formTitle');
-const itemIdInput = document.getElementById('itemId');
-const cancelEditButton = document.getElementById('cancelEdit');
-const tableBody = document.getElementById('inventoryTableBody');
-const searchInput = document.getElementById('searchInput');
-const logoutButton = document.getElementById('logoutButton');
-const adminUserLabel = document.getElementById('adminUserLabel');
-const categorySummaryBody = document.getElementById('categorySummaryBody');
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>在庫管理アプリ - 管理者画面</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar admin-topbar">
+        <div>
+          <p class="eyebrow">Inventory System</p>
+          <h1>管理者画面</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="adminUserLabel" class="user-label">ログイン中</span>
+          <button id="logoutButton" class="secondary-button">ログアウト</button>
+        </div>
+      </header>
 
-const totalItemsOutput = document.getElementById('totalItems');
-const totalValueOutput = document.getElementById('totalValue');
-const lowStockCountOutput = document.getElementById('lowStockCount');
+      <section class="summary-grid" aria-label="在庫概要">
+        <article class="summary-card accent-blue">
+          <span>総在庫数</span>
+          <strong id="totalItems">0</strong>
+        </article>
+        <article class="summary-card accent-gold">
+          <span>総在庫金額</span>
+          <strong id="totalValue">¥0</strong>
+        </article>
+        <article class="summary-card accent-red">
+          <span>要補充</span>
+          <strong id="lowStockCount">0</strong>
+        </article>
+      </section>
 
-let items = [];
+      <main class="panel-grid">
+        <section class="panel form-panel">
+          <h2 id="formTitle">商品を追加</h2>
+          <form id="inventoryForm">
+            <input type="hidden" id="itemId" />
 
-async function checkSession() {
-  try {
-    const response = await fetch('/api/session');
-    const data = await response.json();
-    if (!data.loggedIn) {
-      window.location.href = '/login';
-      return false;
-    }
+            <div class="field-grid">
+              <label>
+                <span>商品名</span>
+                <input id="name" name="name" type="text" placeholder="例: 紙コップ 500ml" required />
+              </label>
 
-    adminUserLabel.textContent = `${data.username} でログイン中`;
-    return true;
-  } catch (error) {
-    window.location.href = '/login';
-    return false;
-  }
-}
+              <label>
+                <span>カテゴリ</span>
+                <select id="category" name="category"></select>
+              </label>
 
-async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+              <label>
+                <span>在庫数</span>
+                <input id="quantity" name="quantity" type="number" min="0" value="0" required />
+              </label>
 
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.message || '処理に失敗しました');
-  }
+              <label>
+                <span>単価</span>
+                <input id="price" name="price" type="number" min="0" step="1" value="0" required />
+              </label>
 
-  return data;
-}
+              <label>
+                <span>仕入先</span>
+                <input id="supplier" name="supplier" type="text" placeholder="例: A商事" />
+              </label>
 
-function getStatusMeta(status) {
-  const statusMap = {
-    通常: { className: 'status-normal', label: '通常' },
-    要確認: { className: 'status-warning', label: '要確認' },
-    要補充: { className: 'status-low', label: '要補充' },
-  };
-
-  return statusMap[status] || statusMap['通常'];
-}
-
-async function loadItems() {
-  try {
-    items = await fetchJSON('/api/items?q=' + encodeURIComponent(searchInput.value.trim()));
-    renderTable();
-  } catch (error) {
-    console.error(error);
-    alert(error.message);
-  }
-}
-
-async function loadSummary() {
-  try {
-    const summary = await fetchJSON('/api/summary');
-    totalItemsOutput.textContent = Number(summary.totalItems || 0).toLocaleString();
-    totalValueOutput.textContent = `¥${Number(summary.totalValue || 0).toLocaleString()}`;
-    lowStockCountOutput.textContent = Number(summary.lowStockCount || 0).toLocaleString();
-  } catch (error) {
-    console.error(error);
-    alert(error.message);
-  }
-}
-
-async function loadCategorySummary() {
-  try {
-    const categories = await fetchJSON('/api/category-summary');
-    renderCategorySummary(categories);
-  } catch (error) {
-    console.error(error);
-    alert(error.message);
-  }
-}
-
-function renderCategorySummary(categories) {
-  if (!categories || categories.length === 0) {
-    categorySummaryBody.innerHTML = '<tr><td colspan="4" class="empty-state">カテゴリデータはありません</td></tr>';
-    return;
-  }
-
-  categorySummaryBody.innerHTML = categories
-    .map((cat) => `
-      <tr>
-        <td>${cat.category}</td>
-        <td>${cat.itemCount}</td>
-        <td>${Number(cat.totalQuantity).toLocaleString()}</td>
-        <td>¥${Number(cat.totalValue).toLocaleString()}</td>
-      </tr>
-    `)
-    .join('');
-}
-
-function renderTable() {
-  if (!items.length) {
-    tableBody.innerHTML = '<tr><td colspan="6" class="empty-state">該当する商品がありません</td></tr>';
-    return;
-  }
-
-  tableBody.innerHTML = items
-    .map((item) => {
-      const statusMeta = getStatusMeta(item.status);
-      return `
-        <tr>
-          <td>${item.name}</td>
-          <td>${item.category}</td>
-          <td>${Number(item.quantity).toLocaleString()}</td>
-          <td>¥${Number(item.price).toLocaleString()}</td>
-          <td><span class="status-badge ${statusMeta.className}">${statusMeta.label}</span></td>
-          <td>
-            <div class="row-actions">
-              <button class="edit-btn" data-action="edit" data-id="${item.id}">編集</button>
-              <button class="delete-btn" data-action="delete" data-id="${item.id}">削除</button>
+              <label>
+                <span>状態</span>
+                <select id="status" name="status">
+                  <option value="通常">通常</option>
+                  <option value="要確認">要確認</option>
+                  <option value="要補充">要補充</option>
+                </select>
+              </label>
             </div>
-          </td>
-        </tr>
-      `;
-    })
-    .join('');
-}
 
-function resetForm() {
-  inventoryForm.reset();
-  document.getElementById('quantity').value = 0;
-  document.getElementById('price').value = 0;
-  itemIdInput.value = '';
-  formTitle.textContent = '商品を追加';
-  cancelEditButton.classList.add('hidden');
-}
+            <div class="form-actions">
+              <button type="submit" class="primary-button">保存</button>
+              <button type="button" id="cancelEdit" class="secondary-button hidden">キャンセル</button>
+            </div>
+          </form>
+        </section>
 
-async function editItem(itemId) {
-  const item = items.find((entry) => entry.id === itemId);
-  if (!item) return;
+        <section class="panel table-panel">
+          <div class="table-toolbar">
+            <h2>商品一覧</h2>
+            <div class="toolbar-controls">
+              <input id="searchInput" type="search" placeholder="商品名やカテゴリで検索" aria-label="商品検索" />
+            </div>
+          </div>
 
-  itemIdInput.value = item.id;
-  document.getElementById('name').value = item.name;
-  document.getElementById('category').value = item.category;
-  document.getElementById('quantity').value = item.quantity;
-  document.getElementById('price').value = item.price;
-  document.getElementById('supplier').value = item.supplier;
-  document.getElementById('status').value = item.status;
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>商品名</th>
+                  <th>カテゴリ</th>
+                  <th>在庫数</th>
+                  <th>単価</th>
+                  <th>状態</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="inventoryTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
 
-  formTitle.textContent = '商品を編集';
-  cancelEditButton.classList.remove('hidden');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
+      <section class="panel category-panel">
+        <h2>カテゴリ管理</h2>
 
-async function deleteItem(itemId) {
-  const item = items.find((entry) => entry.id === itemId);
-  if (!item) return;
+        <form id="categoryForm">
+          <input type="hidden" id="categoryId" />
+          <div class="category-form-row">
+            <label>
+              <span>カテゴリ名</span>
+              <input id="categoryName" type="text" placeholder="例: 食品" required />
+            </label>
+            <div class="category-form-actions">
+              <button type="submit" class="primary-button">保存</button>
+              <button type="button" id="cancelCategoryEdit" class="secondary-button hidden">キャンセル</button>
+            </div>
+          </div>
+        </form>
 
-  const confirmed = window.confirm(`${item.name} を削除しますか？`);
-  if (!confirmed) return;
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>カテゴリ名</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="categoryTableBody"></tbody>
+          </table>
+        </div>
+      </section>
 
-  try {
-    await fetchJSON(`/api/items/${itemId}`, { method: 'DELETE' });
-    if (itemIdInput.value === itemId) {
-      resetForm();
-    }
-    await loadItems();
-    await loadSummary();
-    await loadCategorySummary();
-  } catch (error) {
-    alert(error.message);
-  }
-}
+      <section class="panel category-panel">
+        <h2>カテゴリ別集計</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>カテゴリ</th>
+                <th>商品数</th>
+                <th>総在庫数</th>
+                <th>総金額</th>
+              </tr>
+            </thead>
+            <tbody id="categorySummaryBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
 
-inventoryForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
+    <script src="admin.js"></script>
+  </body>
+</html>
 
-  const payload = {
-    name: document.getElementById('name').value.trim(),
-    category: document.getElementById('category').value,
-    quantity: Number(document.getElementById('quantity').value),
-    price: Number(document.getElementById('price').value),
-    supplier: document.getElementById('supplier').value.trim(),
-    status: document.getElementById('status').value,
-  };
-
-  if (!payload.name) {
-    alert('商品名は必須です');
-    return;
-  }
-
-  try {
-    if (itemIdInput.value) {
-      await fetchJSON(`/api/items/${itemIdInput.value}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      });
-    } else {
-      await fetchJSON('/api/items', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-    }
-
-    resetForm();
-    await loadItems();
-    await loadSummary();
-    await loadCategorySummary();
-  } catch (error) {
-    alert(error.message);
-  }
-});
-
-tableBody.addEventListener('click', (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return;
-
-  const { action, id } = target.dataset;
-  if (!action || !id) return;
-
-  if (action === 'edit') {
-    editItem(id);
-  }
-
-  if (action === 'delete') {
-    deleteItem(id);
-  }
-});
-
-searchInput.addEventListener('input', async () => {
-  await loadItems();
-});
-
-cancelEditButton.addEventListener('click', resetForm);
-
-logoutButton.addEventListener('click', async () => {
-  try {
-    await fetchJSON('/api/logout', { method: 'POST' });
-    window.location.href = '/login';
-  } catch (error) {
-    alert(error.message);
-  }
-});
-
-async function initialize() {
-  const isLoggedIn = await checkSession();
-  if (!isLoggedIn) return;
-
-  await loadItems();
-  await loadSummary();
-  await loadCategorySummary();
-}
-
-initialize();

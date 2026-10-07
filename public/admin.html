@@ -1,138 +1,261 @@
-<!DOCTYPE html>
-<html lang="ja">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>在庫管理アプリ - 管理者画面</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="app-shell">
-      <header class="topbar admin-topbar">
-        <div>
-          <p class="eyebrow">Inventory System</p>
-          <h1>管理者画面</h1>
-        </div>
-        <div class="topbar-actions">
-          <span id="adminUserLabel" class="user-label">ログイン中</span>
-          <button id="logoutButton" class="secondary-button">ログアウト</button>
-        </div>
-      </header>
+const express = require('express');
+const path = require('path');
+const crypto = require('crypto');
+const session = require('express-session');
+const {
+  initializeDatabase,
+  listItems,
+  addItem,
+  updateItem,
+  deleteItem,
+  getSummary,
+  getCategorySummary,
+  resetItems,
+  verifyAdmin,
+  listCategories,
+  addCategory,
+  updateCategory,
+  deleteCategory,
+} = require('./db');
 
-      <section class="summary-grid" aria-label="在庫概要">
-        <article class="summary-card accent-blue">
-          <span>総在庫数</span>
-          <strong id="totalItems">0</strong>
-        </article>
-        <article class="summary-card accent-gold">
-          <span>総在庫金額</span>
-          <strong id="totalValue">¥0</strong>
-        </article>
-        <article class="summary-card accent-red">
-          <span>要補充</span>
-          <strong id="lowStockCount">0</strong>
-        </article>
-      </section>
+const app = express();
+const PORT = process.env.PORT || 3000;
+const DEFAULT_ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
-      <main class="panel-grid">
-        <section class="panel form-panel">
-          <h2 id="formTitle">商品を追加</h2>
-          <form id="inventoryForm">
-            <input type="hidden" id="itemId" />
+app.use(express.json());
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'inventory-admin-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 8,
+    },
+  })
+);
+app.use(express.static(path.join(__dirname, 'public')));
 
-            <div class="field-grid">
-              <label>
-                <span>商品名</span>
-                <input id="name" name="name" type="text" placeholder="例: 紙コップ 500ml" required />
-              </label>
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) {
+    return next();
+  }
+  return res.redirect('/login');
+}
 
-              <label>
-                <span>カテゴリ</span>
-                <select id="category" name="category">
-                  <option value="食品">食品</option>
-                  <option value="文房具">文房具</option>
-                  <option value="家電">家電</option>
-                  <option value="清掃用品">清掃用品</option>
-                  <option value="その他">その他</option>
-                </select>
-              </label>
+function requireApiAuth(req, res, next) {
+  if (req.session && req.session.user) {
+    return next();
+  }
+  return res.status(401).json({ message: 'ログインが必要です。' });
+}
 
-              <label>
-                <span>在庫数</span>
-                <input id="quantity" name="quantity" type="number" min="0" value="0" required />
-              </label>
+app.get('/', (req, res) => {
+  if (req.session && req.session.user) {
+    return res.redirect('/admin');
+  }
+  return res.redirect('/login');
+});
 
-              <label>
-                <span>単価</span>
-                <input id="price" name="price" type="number" min="0" step="1" value="0" required />
-              </label>
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
 
-              <label>
-                <span>仕入先</span>
-                <input id="supplier" name="supplier" type="text" placeholder="例: A商事" />
-              </label>
+app.get('/admin', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
 
-              <label>
-                <span>状態</span>
-                <select id="status" name="status">
-                  <option value="通常">通常</option>
-                  <option value="要確認">要確認</option>
-                  <option value="要補充">要補充</option>
-                </select>
-              </label>
-            </div>
+app.get('/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.redirect('/login');
+  });
+});
 
-            <div class="form-actions">
-              <button type="submit" class="primary-button">保存</button>
-              <button type="button" id="cancelEdit" class="secondary-button hidden">キャンセル</button>
-            </div>
-          </form>
-        </section>
+app.post('/api/login', async (req, res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
 
-        <section class="panel table-panel">
-          <div class="table-toolbar">
-            <h2>商品一覧</h2>
-            <div class="toolbar-controls">
-              <input id="searchInput" type="search" placeholder="商品名やカテゴリで検索" aria-label="商品検索" />
-            </div>
-          </div>
+  if (!username || !password) {
+    return res.status(400).json({ message: 'ユーザー名とパスワードを入力してください。' });
+  }
 
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>商品名</th>
-                  <th>カテゴリ</th>
-                  <th>在庫数</th>
-                  <th>単価</th>
-                  <th>状態</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="inventoryTableBody"></tbody>
-            </table>
-          </div>
-        </section>
-      </main>
+  const isValid = await verifyAdmin(username, password);
+  if (!isValid) {
+    return res.status(401).json({ message: 'ユーザー名またはパスワードが違います。' });
+  }
 
-      <section class="panel category-panel">
-        <h2>カテゴリ別集計</h2>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>カテゴリ</th>
-                <th>商品数</th>
-                <th>総在庫数</th>
-                <th>総金額</th>
-              </tr>
-            </thead>
-            <tbody id="categorySummaryBody"></tbody>
-          </table>
-        </div>
-      </section>
-    </div>
+  req.session.user = { username };
+  return res.json({ success: true, username });
+});
 
-    <script src="admin.js"></script>
-  </body>
-</html>
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
+
+app.get('/api/session', (req, res) => {
+  res.json({
+    loggedIn: !!(req.session && req.session.user),
+    username: (req.session && req.session.user && req.session.user.username) || null,
+  });
+});
+
+app.use('/api', requireApiAuth);
+
+app.get('/api/categories', async (req, res) => {
+  try {
+    const categories = await listCategories();
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ message: 'カテゴリ一覧の取得に失敗しました', error: error.message });
+  }
+});
+
+app.post('/api/categories', async (req, res) => {
+  try {
+    const category = await addCategory(req.body.name);
+    res.status(201).json(category);
+  } catch (error) {
+    res.status(400).json({ message: error.message || 'カテゴリの追加に失敗しました' });
+  }
+});
+
+app.put('/api/categories/:id', async (req, res) => {
+  try {
+    const category = await updateCategory(Number(req.params.id), req.body.name);
+    if (!category) {
+      return res.status(404).json({ message: '対象のカテゴリが見つかりませんでした。' });
+    }
+    res.json(category);
+  } catch (error) {
+    res.status(400).json({ message: error.message || 'カテゴリの更新に失敗しました' });
+  }
+});
+
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const removed = await deleteCategory(Number(req.params.id));
+    if (!removed) {
+      return res.status(404).json({ message: '対象のカテゴリが見つかりませんでした。' });
+    }
+    res.json({ message: 'カテゴリを削除しました。' });
+  } catch (error) {
+    res.status(500).json({ message: 'カテゴリの削除に失敗しました', error: error.message });
+  }
+});
+
+app.get('/api/items', async (req, res) => {
+  try {
+    const search = (req.query.q || '').trim();
+    const items = await listItems(search);
+    res.json(items);
+  } catch (error) {
+    res.status(500).json({ message: '商品一覧の取得に失敗しました', error: error.message });
+  }
+});
+
+app.get('/api/summary', async (req, res) => {
+  try {
+    const summary = await getSummary();
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ message: '集計の取得に失敗しました', error: error.message });
+  }
+});
+
+app.get('/api/category-summary', async (req, res) => {
+  try {
+    const categorySummary = await getCategorySummary();
+    res.json(categorySummary);
+  } catch (error) {
+    res.status(500).json({ message: 'カテゴリ別集計の取得に失敗しました', error: error.message });
+  }
+});
+
+app.post('/api/items', async (req, res) => {
+  try {
+    const item = {
+      id: crypto.randomUUID(),
+      name: String(req.body.name || '').trim(),
+      category: String(req.body.category || 'その他'),
+      quantity: Number(req.body.quantity ?? 0),
+      price: Number(req.body.price ?? 0),
+      supplier: String(req.body.supplier || '').trim(),
+      status: String(req.body.status || '通常'),
+    };
+
+    if (!item.name) {
+      return res.status(400).json({ message: '商品名は必須です。' });
+    }
+
+    const created = await addItem(item);
+    res.status(201).json(created);
+  } catch (error) {
+    res.status(500).json({ message: '商品の追加に失敗しました', error: error.message });
+  }
+});
+
+app.put('/api/items/:id', async (req, res) => {
+  try {
+    const item = {
+      id: req.params.id,
+      name: String(req.body.name || '').trim(),
+      category: String(req.body.category || 'その他'),
+      quantity: Number(req.body.quantity ?? 0),
+      price: Number(req.body.price ?? 0),
+      supplier: String(req.body.supplier || '').trim(),
+      status: String(req.body.status || '通常'),
+    };
+
+    if (!item.name) {
+      return res.status(400).json({ message: '商品名は必須です。' });
+    }
+
+    const updated = await updateItem(item);
+    if (!updated) {
+      return res.status(404).json({ message: '対象の商品が見つかりませんでした。' });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ message: '商品の更新に失敗しました', error: error.message });
+  }
+});
+
+app.delete('/api/items/:id', async (req, res) => {
+  try {
+    const removed = await deleteItem(req.params.id);
+    if (!removed) {
+      return res.status(404).json({ message: '対象の商品が見つかりませんでした。' });
+    }
+
+    res.json({ message: '商品を削除しました。' });
+  } catch (error) {
+    res.status(500).json({ message: '商品の削除に失敗しました', error: error.message });
+  }
+});
+
+app.post('/api/reset', async (req, res) => {
+  try {
+    const items = await resetItems();
+    res.json({ message: 'サンプルデータを再読み込みしました。', items });
+  } catch (error) {
+    res.status(500).json({ message: 'データの初期化に失敗しました', error: error.message });
+  }
+});
+
+initializeDatabase(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD)
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+      console.log(`Default admin login: ${DEFAULT_ADMIN_USERNAME} / ${DEFAULT_ADMIN_PASSWORD}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
+  });
+
