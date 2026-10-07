@@ -1,6 +1,8 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 const {
   initializeDatabase,
   listItems,
@@ -8,14 +10,97 @@ const {
   updateItem,
   deleteItem,
   getSummary,
+  getCategorySummary,
   resetItems,
+  verifyAdmin,
 } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DEFAULT_ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
 app.use(express.json());
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'inventory-admin-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 8,
+    },
+  })
+);
 app.use(express.static(path.join(__dirname, 'public')));
+
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) {
+    return next();
+  }
+  return res.redirect('/login');
+}
+
+function requireApiAuth(req, res, next) {
+  if (req.session && req.session.user) {
+    return next();
+  }
+  return res.status(401).json({ message: 'ログインが必要です。' });
+}
+
+app.get('/', (req, res) => {
+  if (req.session && req.session.user) {
+    return res.redirect('/admin');
+  }
+  return res.redirect('/login');
+});
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/admin', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.redirect('/login');
+  });
+});
+
+app.post('/api/login', async (req, res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+
+  if (!username || !password) {
+    return res.status(400).json({ message: 'ユーザー名とパスワードを入力してください。' });
+  }
+
+  const isValid = await verifyAdmin(username, password);
+  if (!isValid) {
+    return res.status(401).json({ message: 'ユーザー名またはパスワードが違います。' });
+  }
+
+  req.session.user = { username };
+  return res.json({ success: true, username });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
+
+app.get('/api/session', (req, res) => {
+  res.json({
+    loggedIn: !!(req.session && req.session.user),
+    username: (req.session && req.session.user && req.session.user.username) || null,
+  });
+});
+
+app.use('/api', requireApiAuth);
 
 app.get('/api/items', async (req, res) => {
   try {
@@ -33,6 +118,15 @@ app.get('/api/summary', async (req, res) => {
     res.json(summary);
   } catch (error) {
     res.status(500).json({ message: '集計の取得に失敗しました', error: error.message });
+  }
+});
+
+app.get('/api/category-summary', async (req, res) => {
+  try {
+    const categorySummary = await getCategorySummary();
+    res.json(categorySummary);
+  } catch (error) {
+    res.status(500).json({ message: 'カテゴリ別集計の取得に失敗しました', error: error.message });
   }
 });
 
@@ -102,20 +196,17 @@ app.delete('/api/items/:id', async (req, res) => {
 app.post('/api/reset', async (req, res) => {
   try {
     const items = await resetItems();
-    res.json({ message: 'サンプルデータを再読み込���しました。', items });
+    res.json({ message: 'サンプルデータを再読み込みしました。', items });
   } catch (error) {
     res.status(500).json({ message: 'データの初期化に失敗しました', error: error.message });
   }
 });
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-initializeDatabase()
+initializeDatabase(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD)
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Server running at http://localhost:${PORT}`);
+      console.log(`Default admin login: ${DEFAULT_ADMIN_USERNAME} / ${DEFAULT_ADMIN_PASSWORD}`);
     });
   })
   .catch((error) => {
